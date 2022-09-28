@@ -11,12 +11,6 @@ import Foundation
 // MQTT PUBLISH Frame
 struct FramePublish: Frame {
 
-    //3.3.1.1 DUP
-    public var dup: Bool = false
-    //3.3.1.2 QoS
-    //public var qos: CocoaMQTTQoS = .qos1
-    //3.3.1.3 RETAIN
-    public var retain: Bool = false
     //3.3.1.4 Remaining Length
     public var remainingLength: UInt32?
 
@@ -122,13 +116,13 @@ extension FramePublish: InitialWithBytes {
         guard packetFixedHeaderType & 0xF0 == FrameType.publish.rawValue else {
             return nil
         }
+        let recDup = ((packetFixedHeaderType & 0b0000_1000) >> 3) > 0
 
-        let recDup = (packetFixedHeaderType & 0b0000_1000 >> 3) > 0
         guard let recQos = CocoaMQTTQoS(rawValue: (packetFixedHeaderType & 0b0000_0110) >> 1) else {
             return nil
         }
-        let recRetain = packetFixedHeaderType & 0b0000_0001 > 0
 
+        let recRetain = (packetFixedHeaderType & 0b0000_0001) > 0
         // Reserved
         var flags: UInt8 = 0
 
@@ -151,10 +145,9 @@ extension FramePublish: InitialWithBytes {
             flags = flags | 0b0011_0010
         case .qos2:
             flags = flags | 0b0011_0100
-        case .FAILTURE:
+        case .FAILURE:
             printDebug("FAILTURE")
         }
-        
         self.packetFixedHeaderType = flags
 
         /// Packet Identifier

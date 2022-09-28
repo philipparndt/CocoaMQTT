@@ -138,6 +138,10 @@ public class MqttDecodePublish: NSObject {
                     }
                     value = valRes.resStr
                     dataIndex = valRes.newOffset
+     
+                    if userProperty == nil {
+                        userProperty = [:]
+                    }
 
                     userProperty![key!] = value
 
