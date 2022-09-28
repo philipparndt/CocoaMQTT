@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import MqttCocoaAsyncSocket
 
 /**
  * Conn Ack
@@ -550,7 +549,7 @@ extension CocoaMQTT: CocoaMQTTSocketDelegate {
     }
 
     // ?
-    public func socketDidSecure(_ sock: GCDAsyncSocket) {
+    public func socketDidSecure() {
         printDebug("Socket has successfully completed SSL/TLS negotiation")
         sendConnectFrame()
     }
@@ -655,8 +654,13 @@ extension CocoaMQTT: CocoaMQTTReaderDelegate {
             internal_disconnect()
         }
 
-        delegate?.mqtt(self, didConnectAck: connack.returnCode!)
-        didConnectAck(self, connack.returnCode!)
+        if let returnCode = connack.returnCode {
+            delegate?.mqtt(self, didConnectAck: returnCode)
+            didConnectAck(self, returnCode)
+        }
+        else {
+            printWarning("No return code for connack.")
+        }
     }
 
     func didReceive(_ reader: CocoaMQTTReader, publish: FramePublish) {

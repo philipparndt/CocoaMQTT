@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import MqttCocoaAsyncSocket
 
 /**
  * Connection State
@@ -604,7 +603,7 @@ extension CocoaMQTT5: CocoaMQTTSocketDelegate {
     }
 
     // ?
-    public func socketDidSecure(_ sock: GCDAsyncSocket) {
+    public func socketDidSecure() {
         printDebug("Socket has successfully completed SSL/TLS negotiation")
         sendConnectFrame()
     }
@@ -721,8 +720,13 @@ extension CocoaMQTT5: CocoaMQTTReaderDelegate {
         }
 
 
-        delegate?.mqtt5(self, didConnectAck: connack.reasonCode!, connAckData: connack.connackProperties ?? nil)
-        didConnectAck(self, connack.reasonCode!, connack.connackProperties ?? nil)
+        if let reasonCode = connack.reasonCode {
+            delegate?.mqtt5(self, didConnectAck: reasonCode, connAckData: connack.connackProperties ?? nil)
+            didConnectAck(self, reasonCode, connack.connackProperties ?? nil)
+        }
+        else {
+            printWarning("No reasonCode for connack.")
+        }
     }
 
     func didReceive(_ reader: CocoaMQTTReader, publish: FramePublish) {
