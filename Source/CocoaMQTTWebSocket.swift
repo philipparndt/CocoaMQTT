@@ -6,7 +6,6 @@
 //
 
 import Foundation
-import Starscream
 #if IS_SWIFT_PACKAGE
 import CocoaMQTT
 #endif
@@ -17,11 +16,9 @@ public protocol CocoaMQTTWebSocketConnectionDelegate: AnyObject {
 
     func connection(_ conn: CocoaMQTTWebSocketConnection, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Swift.Void)
 
-    func urlSessionConnection(_ conn: CocoaMQTTWebSocketConnection, didReceiveTrust trust: SecTrust, didReceiveChallenge challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
-
     func connectionOpened(_ conn: CocoaMQTTWebSocketConnection)
 
-    func connectionClosed(_ conn: CocoaMQTTWebSocketConnection, withError error: Error?, withCode code: UInt16?)
+    func connectionClosed(_ conn: CocoaMQTTWebSocketConnection, withError error: Error?)
 
     func connection(_ conn: CocoaMQTTWebSocketConnection, receivedString string: String)
 
@@ -49,6 +46,97 @@ public protocol CocoaMQTTWebSocketConnectionBuilder {
 
 // MARK: - CocoaMQTTWebSocket
 
+struct WriteItem: Hashable {
+    let uuid = UUID()
+    let tag: Int
+    let timeout: DispatchWallTime
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(uuid)
+    }
+}
+
+class ScheduledWriteController {
+    private var queue = DispatchQueue.init(label: "write.ws.cocoamqtt.emqx", qos: .default)
+    private(set) var scheduledWrites = Set<WriteItem>()
+
+    func insert(_ item: WriteItem) {
+        queue.sync {
+            _ = scheduledWrites.insert(item)
+        }
+    }
+
+    func remove(_ item: WriteItem) -> WriteItem? {
+        return queue.sync {
+            scheduledWrites.remove(item)
+        }
+    }
+
+    func removeAll() {
+        queue.sync {
+            scheduledWrites.removeAll()
+        }
+    }
+
+    func closestTimeout() -> DispatchWallTime? {
+        return queue.sync {
+             scheduledWrites.sorted(by: { a,b in a.timeout < b.timeout }).first?.timeout
+        }
+    }
+}
+
+struct ReadItem {
+    let tag: Int
+    let length: UInt
+    let timeout: DispatchWallTime
+}
+
+class ScheduledReadController {
+    private var queue = DispatchQueue.init(label: "read.ws.cocoamqtt.emqx", qos: .default)
+    private var readBuffer = Data()
+    private(set) var scheduledReads: [ReadItem] = []
+
+    func append(_ item: ReadItem) {
+        queue.sync {
+            scheduledReads.append(item)
+        }
+    }
+
+    func available() -> Bool {
+        return queue.sync {
+            scheduledReads.first?.length ?? UInt.max <= readBuffer.count
+        }
+    }
+
+    func take() -> (Data, Int) {
+        queue.sync {
+            let nextRead = scheduledReads.removeFirst()
+            let readRange = readBuffer.startIndex..<Data.Index(nextRead.length)
+            let readData = readBuffer.subdata(in: readRange)
+            readBuffer.removeSubrange(readRange)
+            return (readData, nextRead.tag)
+        }
+    }
+
+    func removeAll() {
+        queue.sync {
+            readBuffer.removeAll()
+            scheduledReads.removeAll()
+        }
+    }
+
+    func closestTimeout() -> DispatchWallTime? {
+        return queue.sync {
+             scheduledReads.sorted(by: { a,b in a.timeout < b.timeout }).first?.timeout
+        }
+    }
+
+    func append(_ data: Data) {
+        queue.sync {
+            readBuffer.append(data)
+        }
+    }
+}
+
 public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
 
     public var enableSSL = false
@@ -63,16 +151,11 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
 
         public init() {}
 
+
         public func buildConnection(forURL url: URL, withHeaders headers: [String: String]) throws -> CocoaMQTTWebSocketConnection {
-            if #available(OSX 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *) {
-                let config = URLSessionConfiguration.default
-                config.httpAdditionalHeaders = headers
-                return CocoaMQTTWebSocket.FoundationConnection(url: url, config: config)
-            } else {
-                var request = URLRequest(url: url)
-                headers.forEach { request.setValue($1, forHTTPHeaderField: $0)}
-                return CocoaMQTTWebSocket.StarscreamConnection(request: request)
-            }
+            let config = URLSessionConfiguration.default
+            config.httpAdditionalHeaders = headers
+            return CocoaMQTTWebSocket.FoundationConnection(url: url, config: config)
         }
     }
 
@@ -117,7 +200,7 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
 
     public func disconnect() {
         internalQueue.async {
-            // self.reset()
+            //self.reset()
             self.closeConnection(withError: nil)
         }
     }
@@ -135,11 +218,13 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
             let newWrite = WriteItem(tag: tag, timeout: (timeout > 0.0) ? .now() + timeout : .distantFuture)
             self.scheduledWrites.insert(newWrite)
             self.checkScheduledWrites()
+
             self.connection?.write(data: data) { possibleError in
                 if let error = possibleError {
                     self.closeConnection(withError: error)
                 } else {
                     guard self.scheduledWrites.remove(newWrite) != nil else { return }
+
                     guard let delegate = self.delegate else { return }
                     delegate.socket(self, didWriteDataWithTag: tag)
                 }
@@ -147,7 +232,6 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
         }
     }
 
-    @ConcurrentAtomic(wrappedValue: nil, label: "CocoaMQTTWebSocket.delegate")
     internal var delegate: CocoaMQTTSocketDelegate?
     internal var delegateQueue: DispatchQueue?
     internal var internalQueue = DispatchQueue(label: "CocoaMQTTWebSocket")
@@ -159,11 +243,11 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
         connection?.disconnect()
         connection = nil
 
-        readBuffer.removeAll()
         scheduledReads.removeAll()
         readTimeoutTimer.reset()
 
         scheduledWrites.removeAll()
+
         writeTimeoutTimer.reset()
     }
 
@@ -177,53 +261,49 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
     private class ReusableTimer {
         let queue: DispatchQueue
         var timer: DispatchSourceTimer?
+        private let semaphore = DispatchSemaphore(value: 1)
 
         init(queue: DispatchQueue) {
             self.queue = queue
         }
 
         func schedule(wallDeadline: DispatchWallTime, handler: @escaping () -> Void) {
-            reset()
+            semaphore.wait()
+            timer?.cancel()
+            timer = nil
             let newTimer = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
             timer = newTimer
             newTimer.schedule(wallDeadline: wallDeadline)
             newTimer.setEventHandler(handler: handler)
             newTimer.resume()
+            semaphore.signal()
         }
 
         func reset() {
-            if timer != nil {
-                timer?.cancel()
-                timer = nil
-            }
+            semaphore.wait()
+            timer?.cancel()
+            timer = nil
+            semaphore.signal()
         }
     }
 
-    private struct ReadItem {
-        let tag: Int
-        let length: UInt
-        let timeout: DispatchWallTime
-    }
 
-    private var readBuffer = Data()
-    private var scheduledReads: [ReadItem] = []
+    private var scheduledReads = ScheduledReadController()
     private lazy var readTimeoutTimer = ReusableTimer(queue: internalQueue)
     private func checkScheduledReads() {
         guard let theDelegate = delegate else { return }
         guard let delegateQueue = delegateQueue else { return }
 
         readTimeoutTimer.reset()
-        while (scheduledReads.first?.length ?? UInt.max) <= readBuffer.count {
-            let nextRead = scheduledReads.removeFirst()
-            let readRange = readBuffer.startIndex..<Data.Index(nextRead.length)
-            let readData = readBuffer.subdata(in: readRange)
-            readBuffer.removeSubrange(readRange)
+
+        while scheduledReads.available() {
+            let taken = scheduledReads.take()
             delegateQueue.async {
-                theDelegate.socket(self, didRead: readData, withTag: nextRead.tag)
+                theDelegate.socket(self, didRead: taken.0, withTag: taken.1)
             }
         }
 
-        guard let closestTimeout = scheduledReads.sorted(by: { a, b in a.timeout < b.timeout }).first?.timeout else { return }
+        guard let closestTimeout = scheduledReads.closestTimeout() else { return }
 
         if closestTimeout < .now() {
             closeConnection(withError: CocoaMQTTError.readTimeout)
@@ -234,19 +314,12 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
         }
     }
 
-    private struct WriteItem: Hashable {
-        let uuid = UUID()
-        let tag: Int
-        let timeout: DispatchWallTime
-        func hash(into hasher: inout Hasher) {
-            hasher.combine(uuid)
-        }
-    }
-    private var scheduledWrites = Set<WriteItem>()
+    private var scheduledWrites = ScheduledWriteController()
     private lazy var writeTimeoutTimer = ReusableTimer(queue: internalQueue)
     private func checkScheduledWrites() {
         writeTimeoutTimer.reset()
-        guard let closestTimeout = scheduledWrites.sorted(by: { a, b in a.timeout < b.timeout }).first?.timeout else { return }
+        guard let closestTimeout = scheduledWrites.closestTimeout() else { return }
+
         if closestTimeout < .now() {
             closeConnection(withError: CocoaMQTTError.writeTimeout)
         } else {
@@ -258,17 +331,8 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
 }
 
 extension CocoaMQTTWebSocket: CocoaMQTTWebSocketConnectionDelegate {
-    public func urlSessionConnection(_ conn: CocoaMQTTWebSocketConnection, didReceiveTrust trust: SecTrust, didReceiveChallenge challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        if let del = delegate {
-            __delegate_queue {
-                del.socketUrlSession(self, didReceiveTrust: trust, didReceiveChallenge: challenge, completionHandler: completionHandler)
-            }
-        } else {
-            completionHandler(.performDefaultHandling, nil)
-        }
-    }
-
-    public func connection(_ conn: CocoaMQTTWebSocketConnection, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Void) {
+    public func connection(_ conn: CocoaMQTTWebSocketConnection, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Swift.Void) {
+        guard conn.isEqual(connection) else { return }
         if let del = delegate {
             __delegate_queue {
                 del.socket(self, didReceive: trust, completionHandler: completionHandler)
@@ -287,7 +351,7 @@ extension CocoaMQTTWebSocket: CocoaMQTTWebSocketConnectionDelegate {
         }
     }
 
-    public func connectionClosed(_ conn: CocoaMQTTWebSocketConnection, withError error: Error?, withCode code: UInt16?) {
+    public func connectionClosed(_ conn: CocoaMQTTWebSocketConnection, withError error: Error?) {
         guard conn.isEqual(connection) else { return }
         closeConnection(withError: error)
     }
@@ -299,14 +363,13 @@ extension CocoaMQTTWebSocket: CocoaMQTTWebSocketConnectionDelegate {
 
     public func connection(_ conn: CocoaMQTTWebSocketConnection, receivedData data: Data) {
         guard conn.isEqual(connection) else { return }
-        readBuffer.append(data)
+        scheduledReads.append(data)
         checkScheduledReads()
     }
 }
 
 // MARK: - CocoaMQTTWebSocket.FoundationConnection
 
-@available(OSX 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 public extension CocoaMQTTWebSocket {
     class FoundationConnection: NSObject, CocoaMQTTWebSocketConnection {
 
@@ -337,9 +400,7 @@ public extension CocoaMQTTWebSocket {
 
         public func write(data: Data, handler: @escaping (Error?) -> Void) {
             task?.send(.data(data)) { possibleError in
-                self.queue.async {
-                    handler(possibleError)
-                }
+                handler(possibleError)
             }
         }
 
@@ -360,7 +421,7 @@ public extension CocoaMQTTWebSocket {
                             }
                             self.scheduleRead()
                         case .failure(let error):
-                            delegate.connectionClosed(self, withError: error, withCode: nil)
+                            delegate.connectionClosed(self, withError: error)
                         }
                     }
                 }
@@ -369,7 +430,6 @@ public extension CocoaMQTTWebSocket {
     }
 }
 
-@available(OSX 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 extension CocoaMQTTWebSocket.FoundationConnection: URLSessionWebSocketDelegate {
     public func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         queue.async {
@@ -377,8 +437,6 @@ extension CocoaMQTTWebSocket.FoundationConnection: URLSessionWebSocketDelegate {
                 delegate.connection(self, didReceive: trust) { shouldTrust in
                     completionHandler(shouldTrust ? .performDefaultHandling : .rejectProtectionSpace, nil)
                 }
-                delegate.urlSessionConnection(self, didReceiveTrust: trust, didReceiveChallenge: challenge, completionHandler: completionHandler)
-
             } else {
                 completionHandler(.performDefaultHandling, nil)
             }
@@ -393,102 +451,8 @@ extension CocoaMQTTWebSocket.FoundationConnection: URLSessionWebSocketDelegate {
 
     public func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
         queue.async {
-            self.delegate?.connectionClosed(self, withError: CocoaMQTTError.FoundationConnection.closed(closeCode), withCode: nil)
+            self.delegate?.connectionClosed(self, withError: CocoaMQTTError.FoundationConnection.closed(closeCode))
         }
-    }
-}
-
-// MARK: - CocoaMQTTWebSocket.StarscreamConnection
-
-public extension CocoaMQTTWebSocket {
-    class StarscreamConnection: NSObject, CocoaMQTTWebSocketConnection {
-        public var reference: WebSocket
-        public weak var delegate: CocoaMQTTWebSocketConnectionDelegate?
-        public var queue: DispatchQueue {
-            get { reference.callbackQueue }
-            set { reference.callbackQueue = newValue }
-        }
-
-        public init(request: URLRequest) {
-            reference = WebSocket(request: request)
-            super.init()
-            reference.delegate = self
-        }
-
-        public func connect() {
-            reference.connect()
-        }
-
-        public func disconnect() {
-            reference.disconnect()
-        }
-
-        public func write(data: Data, handler: @escaping (Error?) -> Void) {
-            reference.write(data: data) {
-                handler(nil)
-            }
-        }
-    }
-}
-
-extension CocoaMQTTWebSocket.StarscreamConnection: CertificatePinning {
-    public func evaluateTrust(trust: SecTrust, domain: String?, completion: ((PinningState) -> Void)) {
-        var result: SecTrustResultType = .unspecified
-        SecTrustEvaluate(trust, &result)
-        let e = CFErrorCreate(kCFAllocatorDefault, "FoundationSecurityError" as NSString?, Int(result.rawValue), nil)
-        guard let delegate = self.delegate else {
-            return completion(.failed(e))
-        }
-
-        var shouldAccept = false
-        let semaphore = DispatchSemaphore(value: 0)
-        delegate.connection(self, didReceive: trust) { result in
-            shouldAccept = result
-            semaphore.signal()
-        }
-        semaphore.wait()
-
-        if shouldAccept {
-            completion(.success)
-        } else {
-            completion(.failed(e))
-        }
-    }
-}
-
-extension CocoaMQTTWebSocket.StarscreamConnection: WebSocketDelegate {
-    public func didReceive(event: Starscream.WebSocketEvent, client: Starscream.WebSocketClient) {
-        switch event {
-        case .connected:
-            delegate?.connectionOpened(self)
-        case .disconnected(_, let code):
-            delegate?.connectionClosed(self, withError: nil, withCode: code)
-        case .text(let string):
-            delegate?.connection(self, receivedString: string)
-        case .binary(let data):
-            delegate?.connection(self, receivedData: data)
-        case .ping:
-            break
-        case .pong:
-            break
-        case .viabilityChanged:
-            break
-        case .reconnectSuggested:
-            break
-        case .cancelled:
-            delegate?.connectionClosed(self, withError: nil, withCode: nil)
-        case .error(let error):
-            delegate?.connectionClosed(self, withError: error, withCode: nil)
-        default:
-            break
-        }
-    }
-
-    // Backward-compatible overload for Starscream 4.x where the delegate used `client: WebSocket`.
-    // Keeping this method allows the same source to compile against both 4.x and 5.x.
-    public func didReceive(event: Starscream.WebSocketEvent, client: Starscream.WebSocket) {
-        // Forward to the WebSocketClient-based handler to avoid duplicate logic
-        self.didReceive(event: event, client: client as Starscream.WebSocketClient)
     }
 }
 
@@ -498,7 +462,7 @@ extension CocoaMQTTWebSocket {
 
     func __delegate_queue(_ fun: @escaping () -> Void) {
         delegateQueue?.async { [weak self] in
-            guard self != nil else { return }
+            guard let _ = self else { return }
             fun()
         }
     }
