@@ -6,18 +6,15 @@ import PackageDescription
 let package = Package(
     name: "CocoaMQTT",
     platforms: [
-        .macOS(.v10_13),
-        .iOS(.v12),
-        .tvOS(.v12)
+        .macOS(.v10_15),
+        .iOS(.v13),
+        .tvOS(.v13)
     ],
     products: [
         .library(name: "CocoaMQTT", targets: ["CocoaMQTT"]),
         .library(name: "CocoaMQTTWebSocket", targets: ["CocoaMQTTWebSocket"])
     ],
     dependencies: [
-        // Allow Starscream 4.x and 5.x to avoid version conflicts in client apps
-        .package(url: "https://github.com/daltoniam/Starscream.git", "4.0.8"..<"6.0.0"),
-        .package(url: "https://github.com/leeway1208/MqttCocoaAsyncSocket", from: "1.0.8"),
         // SwiftLint command plugin used by CI/local lint commands only.
         // We do not attach it as a build tool plugin to avoid affecting build outputs.
         .package(url: "https://github.com/SimplyDanny/SwiftLintPlugins", from: "0.63.2"),
@@ -25,14 +22,14 @@ let package = Package(
     targets: [
         .target(
             name: "CocoaMQTT",
-            dependencies: ["MqttCocoaAsyncSocket"],
+            dependencies: [],
             path: "Source",
             exclude: ["CocoaMQTTWebSocket.swift"],
             swiftSettings: [.define("IS_SWIFT_PACKAGE")]
         ),
         .target(
             name: "CocoaMQTTWebSocket",
-            dependencies: ["CocoaMQTT", "Starscream"],
+            dependencies: ["CocoaMQTT"],
             path: "Source",
             sources: ["CocoaMQTTWebSocket.swift"],
             swiftSettings: [.define("IS_SWIFT_PACKAGE")]

@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import MqttCocoaAsyncSocket
 
 /**
  * Connection State
