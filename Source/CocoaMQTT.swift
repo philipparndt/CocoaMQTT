@@ -77,8 +77,6 @@ import Foundation
     /// This method will be called if enable  `allowUntrustCACertificate`
     @objc optional func mqtt(_ mqtt: CocoaMQTT, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Void)
 
-    @objc optional func mqttUrlSession(_ mqtt: CocoaMQTT, didReceiveTrust trust: SecTrust, didReceiveChallenge challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
-
     ///
     @objc optional func mqtt(_ mqtt: CocoaMQTT, didPublishComplete id: UInt16)
 
@@ -135,8 +133,6 @@ protocol CocoaMQTTClient {
 }
 
 /// MQTT Client
-///
-/// - Note: MGCDAsyncSocket need delegate to extend NSObject
 public class CocoaMQTT: NSObject, CocoaMQTTClient {
 
     public weak var delegate: CocoaMQTTDelegate?
@@ -578,18 +574,6 @@ extension CocoaMQTT: CocoaMQTTSocketDelegate {
 
         delegate?.mqtt?(self, didReceive: trust, completionHandler: completionHandler)
         didReceiveTrust(self, trust, completionHandler)
-    }
-
-    public func socketUrlSession(_ socket: CocoaMQTTSocketProtocol, didReceiveTrust trust: SecTrust, didReceiveChallenge challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
-        printDebug("Call the SSL/TLS manually validating function - socketUrlSession")
-
-        delegate?.mqttUrlSession?(self, didReceiveTrust: trust, didReceiveChallenge: challenge, completionHandler: completionHandler)
-    }
-
-    // ?
-    public func socketDidSecure(_ sock: MGCDAsyncSocket) {
-        printDebug("Socket has successfully completed SSL/TLS negotiation")
-        sendConnectFrame()
     }
 
     public func socket(_ socket: CocoaMQTTSocketProtocol, didWriteDataWithTag tag: Int) {
