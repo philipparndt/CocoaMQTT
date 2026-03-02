@@ -96,7 +96,13 @@ class CocoaMQTTDeliver: NSObject {
     ///
     /// return false means the frame is rejected because of the buffer is full
     func add(_ frame: FramePublish) -> Bool {
-        guard !isQueueFull else {
+        // Check queue full status within deliverQueue to avoid race condition
+        var full = false
+        deliverQueue.sync {
+            full = isQueueFull
+        }
+
+        guard !full else {
             printError("Sending buffer is full, frame \(frame) has been rejected to add.")
             return false
         }
