@@ -8,27 +8,20 @@ Pod::Spec.new do |s|
 
   s.swift_version = "5.0"
   s.requires_arc = true
-  s.osx.deployment_target = "10.13"
-  s.ios.deployment_target = "12.0"
-  s.tvos.deployment_target = "10.0"
+  s.osx.deployment_target = "10.15"
+  s.ios.deployment_target = "13.0"
+  s.tvos.deployment_target = "13.0"
   # s.watchos.deployment_target = "2.0"
   s.source   = { :git => "https://github.com/emqx/CocoaMQTT.git", :tag => "2.2.1"}
   s.default_subspec = 'Core'
-  
+
   s.subspec 'Core' do |ss|
-    ss.dependency "MqttCocoaAsyncSocket", "~> 1.0.8"
     ss.source_files = "Source/**/*.swift"
     ss.exclude_files = "Source/CocoaMQTTWebSocket.swift"
   end
-  
+
   s.subspec 'WebSockets' do |ss|
     ss.dependency "CocoaMQTT/Core"
-    # Declaring any platform in a subspec overrides all inherited platform
-    # values from the parent spec, so all supported platforms are redeclared.
-    ss.ios.deployment_target = "12.0"
-    ss.osx.deployment_target = "10.13"
-    ss.tvos.deployment_target = "12.0"
-    ss.dependency "Starscream", ">= 4.0.8", "< 6.0"
     ss.source_files = "Source/CocoaMQTTWebSocket.swift"
   end
 end
