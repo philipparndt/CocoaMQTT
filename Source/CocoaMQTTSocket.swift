@@ -46,6 +46,11 @@ public class CocoaMQTTSocket: NSObject {
     /// Default is false
     public var allowUntrustCACertificate = false
 
+    /// ALPN protocol identifiers sent during TLS handshake.
+    /// Use e.g. ["mqtt"] or ["mqtt/3.1.1"] for MQTT over port 443.
+    /// Only effective when enableSSL is true.
+    public var alpnProtocols: [String] = []
+
     fileprivate var delegateQueue: DispatchQueue?
     fileprivate var connection: NWConnection?
     fileprivate weak var delegate: CocoaMQTTSocketDelegate?
@@ -99,6 +104,9 @@ extension CocoaMQTTSocket: CocoaMQTTSocketProtocol {
                 )
             }
 
+            for proto in alpnProtocols {
+                sec_protocol_options_add_tls_application_protocol(securityOptions, proto)
+            }
 
             let params = NWParameters(tls: options)
             return NWConnection(host: nwHost, port: endpoint, using: params)

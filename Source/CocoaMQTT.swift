@@ -256,6 +256,14 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
         set { (self.socket as? CocoaMQTTSocket)?.allowUntrustCACertificate = newValue }
     }
 
+    /// ALPN protocol identifiers sent during TLS handshake.
+    /// Use e.g. ["mqtt"] or ["mqtt/3.1.1"] for MQTT over port 443.
+    /// Only effective when enableSSL is true.
+    public var alpnProtocols: [String] {
+        get { (self.socket as? CocoaMQTTSocket)?.alpnProtocols ?? [] }
+        set { (self.socket as? CocoaMQTTSocket)?.alpnProtocols = newValue }
+    }
+
     /// The subscribed topics in current communication
     ///
     /// Keeping this dictionary-typed preserves the public API while the backing store remains thread-safe.
