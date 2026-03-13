@@ -265,6 +265,15 @@ public class CocoaMQTT5: NSObject, CocoaMQTT5Client {
         set { (self.socket as? CocoaMQTTSocket)?.alpnProtocols = newValue }
     }
 
+    /// Custom CA certificates for validating the server's certificate.
+    /// When set, the server certificate will be validated against these CA certificates
+    /// instead of the system trust store.
+    /// Only effective when enableSSL is true.
+    public var serverCACertificates: [SecCertificate]? {
+        get { (self.socket as? CocoaMQTTSocket)?.serverCACertificates }
+        set { (self.socket as? CocoaMQTTSocket)?.serverCACertificates = newValue }
+    }
+
     /// The subscribed topics in current communication
     public var subscriptions = ThreadSafeDictionary<String, CocoaMQTTQoS>(label: "subscriptions")
 

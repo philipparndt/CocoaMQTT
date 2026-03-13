@@ -264,6 +264,15 @@ public class CocoaMQTT: NSObject, CocoaMQTTClient {
         set { (self.socket as? CocoaMQTTSocket)?.alpnProtocols = newValue }
     }
 
+    /// Custom CA certificates for validating the server's certificate.
+    /// When set, the server certificate will be validated against these CA certificates
+    /// instead of the system trust store.
+    /// Only effective when enableSSL is true.
+    public var serverCACertificates: [SecCertificate]? {
+        get { (self.socket as? CocoaMQTTSocket)?.serverCACertificates }
+        set { (self.socket as? CocoaMQTTSocket)?.serverCACertificates = newValue }
+    }
+
     /// The subscribed topics in current communication
     ///
     /// Keeping this dictionary-typed preserves the public API while the backing store remains thread-safe.

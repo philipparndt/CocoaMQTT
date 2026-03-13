@@ -51,6 +51,12 @@ public class CocoaMQTTSocket: NSObject {
     /// Only effective when enableSSL is true.
     public var alpnProtocols: [String] = []
 
+    /// Custom CA certificates for validating the server's certificate.
+    /// When set, the server certificate will be validated against these CA certificates
+    /// instead of the system trust store.
+    /// Only effective when enableSSL is true.
+    public var serverCACertificates: [SecCertificate]?
+
     fileprivate var delegateQueue: DispatchQueue?
     fileprivate var connection: NWConnection?
     fileprivate weak var delegate: CocoaMQTTSocketDelegate?
@@ -90,7 +96,27 @@ extension CocoaMQTTSocket: CocoaMQTTSocketProtocol {
             let options = NWProtocolTLS.Options()
             let securityOptions = options.securityProtocolOptions
 
-            if allowUntrustCACertificate {
+            if let serverCAs = serverCACertificates, !serverCAs.isEmpty {
+                // Use custom CA certificates for validation
+                sec_protocol_options_set_verify_block(securityOptions, { [serverCAs] (_, secTrust, completionHandler) in
+                    let trust = sec_trust_copy_ref(secTrust).takeRetainedValue()
+
+                    // Set the custom anchor certificates
+                    SecTrustSetAnchorCertificates(trust, serverCAs as CFArray)
+                    // Only use the custom anchors, not the system trust store
+                    SecTrustSetAnchorCertificatesOnly(trust, true)
+
+                    // Evaluate the trust
+                    var error: CFError?
+                    let result = SecTrustEvaluateWithError(trust, &error)
+
+                    if !result {
+                        printError("Server certificate validation failed: \(error?.localizedDescription ?? "unknown error")")
+                    }
+
+                    completionHandler(result)
+                }, .main)
+            } else if allowUntrustCACertificate {
                 sec_protocol_options_set_verify_block(securityOptions, { (_, trust, completionHandler) in
                     completionHandler(true)
                 }, .main)
