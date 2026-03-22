@@ -82,7 +82,8 @@ public class MqttDecodePublish: NSObject {
                 let resVariableByteInteger = decodeVariableByteInteger(data: publishData, offset: dataIndex)
                 dataIndex = resVariableByteInteger.newOffset
                 let propertyNameByte = resVariableByteInteger.res
-                guard let propertyName = CocoaMQTTPropertyName(rawValue: UInt8(propertyNameByte)) else {
+                guard propertyNameByte >= 0 && propertyNameByte <= UInt8.max,
+                      let propertyName = CocoaMQTTPropertyName(rawValue: UInt8(propertyNameByte)) else {
                     break
                 }
                 switch propertyName.rawValue {
@@ -143,7 +144,9 @@ public class MqttDecodePublish: NSObject {
                         userProperty = [:]
                     }
 
-                    userProperty![key!] = value
+                    if let key = key {
+                        userProperty?[key] = value
+                    }
 
                 // 3.3.2.3.8 Subscription Identifier
                 case CocoaMQTTPropertyName.subscriptionIdentifier.rawValue:
