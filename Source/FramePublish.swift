@@ -201,8 +201,9 @@ extension FramePublish: InitialWithBytes {
 
         } else {
             // MQTT 3.1.1
-            if let data = NSString(bytes: [UInt8](bytes[2...(pos-1)]), length: Int(len), encoding: String.Encoding.utf8.rawValue) {
-                topic =  data as String
+            if len > 0, pos > 2,
+               let data = NSString(bytes: [UInt8](bytes[2...(pos-1)]), length: Int(len), encoding: String.Encoding.utf8.rawValue) {
+                topic = data as String
             }
         }
 
