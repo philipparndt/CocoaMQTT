@@ -155,7 +155,12 @@ public class MqttDecodeConnAck: NSObject {
                     value = valRes.resStr
                     index = valRes.newOffset
 
-                    userProperty![key!] = value
+                    if userProperty == nil {
+                        userProperty = [:]
+                    }
+                    if let key = key {
+                        userProperty?[key] = value
+                    }
 
                 case CocoaMQTTPropertyName.wildcardSubscriptionAvailable.rawValue:
                     if index > connackData.count {
