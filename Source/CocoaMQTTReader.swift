@@ -66,12 +66,20 @@ class CocoaMQTTReader {
         readLength()
     }
 
+    // MQTT spec maximum remaining length: 256 MB
+    private static let maxFrameLength: UInt = 268_435_455
+
     func lengthReady(_ byte: UInt8) {
         length += (UInt)((Int)(byte & 127) * multiply)
         // done
         if byte & 0x80 == 0 {
             if length == 0 {
                 frameReady()
+            } else if length > CocoaMQTTReader.maxFrameLength {
+                printError("Frame length \(length) exceeds maximum, resetting")
+                reset()
+                readHeader()
+                return
             } else {
                 readPayload()
             }
