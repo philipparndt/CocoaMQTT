@@ -12,9 +12,34 @@ import CocoaMQTT
 
 // MARK: - Interfaces
 
+/// The outcome of validating a server's certificate chain.
+public enum CocoaMQTTServerTrustDecision {
+
+    /// Trust the server certificate without further validation.
+    case trust
+
+    /// Reject the connection.
+    case reject
+
+    /// Fall back to the platform's default certificate validation.
+    case useDefault
+}
+
 public protocol CocoaMQTTWebSocketConnectionDelegate: AnyObject {
 
     func connection(_ conn: CocoaMQTTWebSocketConnection, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Swift.Void)
+
+    /// Validate the server's certificate chain.
+    ///
+    /// Unlike `connection(_:didReceive:completionHandler:)` this can also defer to the
+    /// platform's default validation, which is what happens when no custom CA certificates
+    /// are configured and untrusted certificates are not allowed.
+    func connection(_ conn: CocoaMQTTWebSocketConnection, evaluate trust: SecTrust, completionHandler: @escaping (CocoaMQTTServerTrustDecision) -> Swift.Void)
+
+    /// The client identity to present when the server asks for a client certificate (mTLS).
+    ///
+    /// Returning nil leaves the challenge to the platform's default handling.
+    func clientIdentity(for conn: CocoaMQTTWebSocketConnection) -> SecIdentity?
 
     func connectionOpened(_ conn: CocoaMQTTWebSocketConnection)
 
@@ -23,6 +48,15 @@ public protocol CocoaMQTTWebSocketConnectionDelegate: AnyObject {
     func connection(_ conn: CocoaMQTTWebSocketConnection, receivedString string: String)
 
     func connection(_ conn: CocoaMQTTWebSocketConnection, receivedData data: Data)
+}
+
+public extension CocoaMQTTWebSocketConnectionDelegate {
+
+    func connection(_ conn: CocoaMQTTWebSocketConnection, evaluate trust: SecTrust, completionHandler: @escaping (CocoaMQTTServerTrustDecision) -> Swift.Void) {
+        connection(conn, didReceive: trust) { completionHandler($0 ? .trust : .reject) }
+    }
+
+    func clientIdentity(for conn: CocoaMQTTWebSocketConnection) -> SecIdentity? { nil }
 }
 
 public protocol CocoaMQTTWebSocketConnection: NSObjectProtocol {
@@ -140,6 +174,20 @@ class ScheduledReadController {
 public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
 
     public var enableSSL = false
+
+    /// Client certificate settings, see `kCFStreamSSLCertificates`.
+    public var sslSettings: [String: NSObject]?
+
+    /// Allow self-signed ca certificate.
+    ///
+    /// Default is false
+    public var allowUntrustCACertificate = false
+
+    /// Custom CA certificates for validating the server's certificate.
+    /// When set, the server certificate will be validated against these CA certificates
+    /// instead of the system trust store.
+    /// Only effective when enableSSL is true.
+    public var serverCACertificates: [SecCertificate]?
 
     public var shouldConnectWithURIOnly = false
 
@@ -330,6 +378,8 @@ public class CocoaMQTTWebSocket: CocoaMQTTSocketProtocol {
     }
 }
 
+extension CocoaMQTTWebSocket: CocoaMQTTTLSConfigurable {}
+
 extension CocoaMQTTWebSocket: CocoaMQTTWebSocketConnectionDelegate {
     public func connection(_ conn: CocoaMQTTWebSocketConnection, didReceive trust: SecTrust, completionHandler: @escaping (Bool) -> Swift.Void) {
         guard conn.isEqual(connection) else { return }
@@ -340,6 +390,29 @@ extension CocoaMQTTWebSocket: CocoaMQTTWebSocketConnectionDelegate {
         } else {
             completionHandler(false)
         }
+    }
+
+    public func clientIdentity(for conn: CocoaMQTTWebSocketConnection) -> SecIdentity? {
+        guard conn.isEqual(connection) else { return nil }
+        guard let certificates = sslSettings?[kCFStreamSSLCertificates as String] as? NSArray else { return nil }
+        guard let first = certificates.firstObject, CFGetTypeID(first as CFTypeRef) == SecIdentityGetTypeID() else { return nil }
+        return (first as! SecIdentity)
+    }
+
+    public func connection(_ conn: CocoaMQTTWebSocketConnection, evaluate trust: SecTrust, completionHandler: @escaping (CocoaMQTTServerTrustDecision) -> Swift.Void) {
+        guard conn.isEqual(connection) else {
+            // Stale connection, but the challenge still needs an answer.
+            completionHandler(.reject)
+            return
+        }
+
+        // The configured TLS settings decide, exactly as they do for the raw TCP transport.
+        if let trusted = cocoaMQTTEvaluateServerTrust(trust, serverCAs: serverCACertificates, allowUntrusted: allowUntrustCACertificate) {
+            completionHandler(trusted ? .trust : .reject)
+            return
+        }
+
+        completionHandler(.useDefault)
     }
 
     public func connectionOpened(_ conn: CocoaMQTTWebSocketConnection) {
@@ -433,9 +506,24 @@ public extension CocoaMQTTWebSocket {
 extension CocoaMQTTWebSocket.FoundationConnection: URLSessionWebSocketDelegate {
     public func urlSession(_ session: URLSession, task: URLSessionTask, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         queue.async {
-            if let trust = challenge.protectionSpace.serverTrust, let delegate = self.delegate {
-                delegate.connection(self, didReceive: trust) { shouldTrust in
-                    completionHandler(shouldTrust ? .performDefaultHandling : .rejectProtectionSpace, nil)
+            if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
+                if let identity = self.delegate?.clientIdentity(for: self) {
+                    completionHandler(.useCredential, URLCredential(identity: identity, certificates: nil, persistence: .forSession))
+                } else {
+                    completionHandler(.performDefaultHandling, nil)
+                }
+            } else if let trust = challenge.protectionSpace.serverTrust, let delegate = self.delegate {
+                delegate.connection(self, evaluate: trust) { decision in
+                    switch decision {
+                    case .trust:
+                        // Accepting the trust object bypasses the system validation that
+                        // .performDefaultHandling would otherwise re-run and fail.
+                        completionHandler(.useCredential, URLCredential(trust: trust))
+                    case .reject:
+                        completionHandler(.cancelAuthenticationChallenge, nil)
+                    case .useDefault:
+                        completionHandler(.performDefaultHandling, nil)
+                    }
                 }
             } else {
                 completionHandler(.performDefaultHandling, nil)

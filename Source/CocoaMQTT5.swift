@@ -245,21 +245,22 @@ public class CocoaMQTT5: NSObject, CocoaMQTT5Client {
 
     ///
     public var sslSettings: [String: NSObject]? {
-        get { return (self.socket as? CocoaMQTTSocket)?.sslSettings ?? nil }
-        set { (self.socket as? CocoaMQTTSocket)?.sslSettings = newValue }
+        get { return (self.socket as? CocoaMQTTTLSConfigurable)?.sslSettings ?? nil }
+        set { (self.socket as? CocoaMQTTTLSConfigurable)?.sslSettings = newValue }
     }
 
     /// Allow self-signed ca certificate.
     ///
     /// Default is false
     public var allowUntrustCACertificate: Bool {
-        get { return (self.socket as? CocoaMQTTSocket)?.allowUntrustCACertificate ?? false }
-        set { (self.socket as? CocoaMQTTSocket)?.allowUntrustCACertificate = newValue }
+        get { return (self.socket as? CocoaMQTTTLSConfigurable)?.allowUntrustCACertificate ?? false }
+        set { (self.socket as? CocoaMQTTTLSConfigurable)?.allowUntrustCACertificate = newValue }
     }
 
     /// ALPN protocol identifiers sent during TLS handshake.
     /// Use e.g. ["mqtt"] or ["mqtt/3.1.1"] for MQTT over port 443.
-    /// Only effective when enableSSL is true.
+    /// Only effective when enableSSL is true and the raw TCP transport is used;
+    /// URLSession does not expose ALPN configuration for WebSocket connections.
     public var alpnProtocols: [String] {
         get { (self.socket as? CocoaMQTTSocket)?.alpnProtocols ?? [] }
         set { (self.socket as? CocoaMQTTSocket)?.alpnProtocols = newValue }
@@ -270,8 +271,8 @@ public class CocoaMQTT5: NSObject, CocoaMQTT5Client {
     /// instead of the system trust store.
     /// Only effective when enableSSL is true.
     public var serverCACertificates: [SecCertificate]? {
-        get { (self.socket as? CocoaMQTTSocket)?.serverCACertificates }
-        set { (self.socket as? CocoaMQTTSocket)?.serverCACertificates = newValue }
+        get { (self.socket as? CocoaMQTTTLSConfigurable)?.serverCACertificates }
+        set { (self.socket as? CocoaMQTTTLSConfigurable)?.serverCACertificates = newValue }
     }
 
     /// The subscribed topics in current communication
@@ -640,8 +641,10 @@ extension CocoaMQTT5: CocoaMQTTSocketDelegate {
 
         printDebug("Call the SSL/TLS manually validating function")
 
-        delegate?.mqtt5?(self, didReceive: trust, completionHandler: completionHandler)
-        didReceiveTrust(self, trust, completionHandler)
+        // Both hooks get the chance to answer, but only the first answer counts.
+        let answer = cocoaMQTTSingleAnswer(completionHandler)
+        delegate?.mqtt5?(self, didReceive: trust, completionHandler: answer)
+        didReceiveTrust(self, trust, answer)
     }
 
     public func socket(_ socket: CocoaMQTTSocketProtocol, didWriteDataWithTag tag: Int) {

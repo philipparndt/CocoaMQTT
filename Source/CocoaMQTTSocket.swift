@@ -30,6 +30,73 @@ public protocol CocoaMQTTSocketProtocol {
     func write(_ data: Data, withTimeout timeout: TimeInterval, tag: Int)
 }
 
+/// TLS configuration shared by all socket implementations.
+///
+/// Both the raw TCP socket and the WebSocket transport support these settings,
+/// so client code can configure them regardless of the selected transport.
+/// Class-bound so the settings can be mutated through an optional cast.
+public protocol CocoaMQTTTLSConfigurable: AnyObject {
+
+    /// Client certificate settings, see `kCFStreamSSLCertificates`.
+    var sslSettings: [String: NSObject]? { get set }
+
+    /// Allow self-signed ca certificate.
+    ///
+    /// Default is false
+    var allowUntrustCACertificate: Bool { get set }
+
+    /// Custom CA certificates for validating the server's certificate.
+    /// When set, the server certificate will be validated against these CA certificates
+    /// instead of the system trust store.
+    var serverCACertificates: [SecCertificate]? { get set }
+}
+
+/// Wraps a trust completion handler so that it is invoked at most once, no matter
+/// how many hooks are offered the chance to answer.
+func cocoaMQTTSingleAnswer(_ handler: @escaping (Bool) -> Swift.Void) -> (Bool) -> Swift.Void {
+    let lock = NSLock()
+    var answered = false
+    return { result in
+        lock.lock()
+        let isFirstAnswer = !answered
+        answered = true
+        lock.unlock()
+
+        if isFirstAnswer {
+            handler(result)
+        }
+    }
+}
+
+/// Evaluates a server trust against the configured TLS settings.
+///
+/// Returns `nil` when neither custom CA certificates nor untrusted certificates are
+/// configured, meaning the caller should fall back to the platform's default validation.
+public func cocoaMQTTEvaluateServerTrust(_ trust: SecTrust, serverCAs: [SecCertificate]?, allowUntrusted: Bool) -> Bool? {
+    if let serverCAs = serverCAs, !serverCAs.isEmpty {
+        // Set the custom anchor certificates
+        SecTrustSetAnchorCertificates(trust, serverCAs as CFArray)
+        // Only use the custom anchors, not the system trust store
+        SecTrustSetAnchorCertificatesOnly(trust, true)
+
+        // Evaluate the trust
+        var error: CFError?
+        let result = SecTrustEvaluateWithError(trust, &error)
+
+        if !result {
+            printError("Server certificate validation failed: \(error?.localizedDescription ?? "unknown error")")
+        }
+
+        return result
+    }
+
+    if allowUntrusted {
+        return true
+    }
+
+    return nil
+}
+
 // MARK: - CocoaMQTTSocket
 
 public class CocoaMQTTSocket: NSObject {
@@ -64,6 +131,8 @@ public class CocoaMQTTSocket: NSObject {
     public override init() { super.init() }
 }
 
+extension CocoaMQTTSocket: CocoaMQTTTLSConfigurable {}
+
 extension CocoaMQTTSocket: CocoaMQTTSocketProtocol {
     public func setDelegate(_ theDelegate: CocoaMQTTSocketDelegate?, delegateQueue: DispatchQueue?) {
         delegate = theDelegate
@@ -96,29 +165,14 @@ extension CocoaMQTTSocket: CocoaMQTTSocketProtocol {
             let options = NWProtocolTLS.Options()
             let securityOptions = options.securityProtocolOptions
 
-            if let serverCAs = serverCACertificates, !serverCAs.isEmpty {
-                // Use custom CA certificates for validation
-                sec_protocol_options_set_verify_block(securityOptions, { [serverCAs] (_, secTrust, completionHandler) in
+            let serverCAs = serverCACertificates
+            let allowUntrusted = allowUntrustCACertificate
+
+            if serverCAs?.isEmpty == false || allowUntrusted {
+                sec_protocol_options_set_verify_block(securityOptions, { [serverCAs, allowUntrusted] (_, secTrust, completionHandler) in
                     let trust = sec_trust_copy_ref(secTrust).takeRetainedValue()
-
-                    // Set the custom anchor certificates
-                    SecTrustSetAnchorCertificates(trust, serverCAs as CFArray)
-                    // Only use the custom anchors, not the system trust store
-                    SecTrustSetAnchorCertificatesOnly(trust, true)
-
-                    // Evaluate the trust
-                    var error: CFError?
-                    let result = SecTrustEvaluateWithError(trust, &error)
-
-                    if !result {
-                        printError("Server certificate validation failed: \(error?.localizedDescription ?? "unknown error")")
-                    }
-
-                    completionHandler(result)
-                }, .main)
-            } else if allowUntrustCACertificate {
-                sec_protocol_options_set_verify_block(securityOptions, { (_, trust, completionHandler) in
-                    completionHandler(true)
+                    let result = cocoaMQTTEvaluateServerTrust(trust, serverCAs: serverCAs, allowUntrusted: allowUntrusted)
+                    completionHandler(result ?? false)
                 }, .main)
             }
 
